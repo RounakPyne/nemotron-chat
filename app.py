@@ -1,9 +1,10 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import streamlit as st
 from openai import OpenAI
+from supabase import create_client
 
 st.set_page_config(
     page_title="Nemotron",
@@ -12,15 +13,16 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# The API key is configured in Streamlit server secrets, never in the UI.
+# Server-side secrets only. Never put these values in GitHub or the UI.
 try:
     NVIDIA_API_KEY = st.secrets["NVIDIA_API_KEY"]
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 except (KeyError, FileNotFoundError):
-    st.error("The server administrator must configure NVIDIA_API_KEY in Streamlit Secrets.")
+    st.error("The app owner must configure NVIDIA_API_KEY, SUPABASE_URL, and SUPABASE_KEY in Streamlit Secrets.")
     st.stop()
 
 MODEL_ID = st.secrets.get("NVIDIA_MODEL_ID", "nvidia/nemotron-3-ultra-550b-a55b")
-
 st.markdown("""
 <style>
 :root { --bg:#FAF9F5; --side:#F0EEE6; --text:#3D3929; --muted:#83827D; --accent:#C96442; --bubble:#EDEADF; --line:#E3E0D5; }
@@ -47,12 +49,122 @@ div[data-testid="stTextInput"] input { border-radius:14px; }
 </style>
 """, unsafe_allow_html=True)
 
+
 S = st.session_state
 S.setdefault("chats", {})
 S.setdefault("projects", {"Personal": {"description": "General conversations"}})
 S.setdefault("current", None)
 S.setdefault("thinking", False)
 S.setdefault("draft", "")
+S.setdefault("authenticated", False)
+S.setdefault("user", None)
+S.setdefault("supabase", None)
+S.setdefault("loaded_user_id", None)
+
+# ---------- Authentication ----------
+def get_client():
+    if S.get("supabase") is None:
+        S.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return S.supabase
+
+def sign_out():
+    try:
+        if S.get("supabase") is not None:
+            S.supabase.auth.sign_out()
+    except Exception:
+        pass
+    for key in ("authenticated", "user", "loaded_user_id", "supabase", "chats", "current"):
+        S.pop(key, None)
+    S.authenticated = False
+    S.user = None
+    S.supabase = None
+    S.chats = {}
+    S.current = None
+    st.rerun()
+
+def auth_screen():
+    st.markdown('<div class="brand"><span>✻</span> Nemotron</div>', unsafe_allow_html=True)
+    st.subheader("Sign in to your account")
+    st.caption("Your conversations are saved to your account and are private to you.")
+    mode = st.radio("Choose an option", ["Sign in", "Create account"], horizontal=True)
+    with st.form("auth_form"):
+        email = st.text_input("Email", autocomplete="email")
+        password = st.text_input("Password", type="password", autocomplete="current-password")
+        submitted = st.form_submit_button("Sign in" if mode == "Sign in" else "Create account", use_container_width=True)
+    if submitted:
+        if not email.strip() or not password:
+            st.error("Enter your email and password.")
+            return
+        try:
+            client = get_client()
+            if mode == "Sign in":
+                result = client.auth.sign_in_with_password({"email": email.strip(), "password": password})
+                user = result.user
+                if not user:
+                    st.error("Sign-in did not return a user. Check your credentials and try again.")
+                    return
+                S.user = {"id": user.id, "email": user.email}
+                S.authenticated = True
+                S.loaded_user_id = None
+                st.rerun()
+            else:
+                result = client.auth.sign_up({"email": email.strip(), "password": password})
+                if result.user and not result.session:
+                    st.success("Account created. Check your email to confirm the account, then return here and sign in.")
+                elif result.user and result.session:
+                    S.user = {"id": result.user.id, "email": result.user.email}
+                    S.authenticated = True
+                    S.loaded_user_id = None
+                    st.rerun()
+                else:
+                    st.info("If account confirmation is enabled, check your email before signing in.")
+        except Exception as exc:
+            st.error(f"Authentication failed: {exc}")
+
+if not S.get("authenticated") or not S.get("user"):
+    auth_screen()
+    st.stop()
+
+# Recreate a client if necessary, and load only this signed-in user's rows.
+client = get_client()
+user_id = S.user["id"]
+if S.get("loaded_user_id") != user_id:
+    try:
+        rows = client.table("chat_sessions").select("id,title,project_name,messages,created_at,updated_at").order("updated_at", desc=True).execute().data or []
+        loaded_chats = {}
+        project_names = {"Personal": {"description": "General conversations"}}
+        for row in rows:
+            cid = str(row["id"])
+            project = row.get("project_name")
+            loaded_chats[cid] = {
+                "title": row.get("title") or "New chat",
+                "messages": row.get("messages") or [],
+                "pinned": False,
+                "project": project,
+                "updated_at": row.get("updated_at") or row.get("created_at") or "",
+            }
+            if project:
+                project_names.setdefault(project, {"description": ""})
+        S.chats = loaded_chats
+        S.projects = project_names
+        S.loaded_user_id = user_id
+    except Exception as exc:
+        st.error(f"Could not load your saved chats from Supabase: {exc}")
+        st.stop()
+
+def persist_chat(cid):
+    chat = S.chats[cid]
+    now = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": cid,
+        "user_id": user_id,
+        "title": chat.get("title") or "New chat",
+        "project_name": chat.get("project"),
+        "messages": chat.get("messages", []),
+        "updated_at": now,
+    }
+    client.table("chat_sessions").upsert(record, on_conflict="id").execute()
+    chat["updated_at"] = now
 
 def new_chat():
     S.current = None
@@ -62,9 +174,13 @@ def open_chat(cid):
     S.current = cid
 
 def delete_chat(cid):
-    S.chats.pop(cid, None)
-    if S.current == cid:
-        S.current = None
+    try:
+        client.table("chat_sessions").delete().eq("id", cid).eq("user_id", user_id).execute()
+        S.chats.pop(cid, None)
+        if S.current == cid:
+            S.current = None
+    except Exception as exc:
+        st.error(f"Could not delete chat: {exc}")
 
 def toggle_pin(cid):
     S.chats[cid]["pinned"] = not S.chats[cid].get("pinned", False)
@@ -89,6 +205,8 @@ def render_chat_button(cid):
 # ---------- Sidebar ----------
 with st.sidebar:
     st.markdown('<div class="brand"><span>✻</span> Nemotron</div>', unsafe_allow_html=True)
+    st.caption(S.user.get("email", "Signed in"))
+    st.button("Sign out", on_click=sign_out, use_container_width=True)
     st.button("＋  New chat", on_click=new_chat, use_container_width=True)
     search = st.text_input("Search chats", placeholder="🔍  Search chats", label_visibility="collapsed", key="search").strip().lower()
 
@@ -100,16 +218,15 @@ with st.sidebar:
         st.text_input("Description (optional)", key="new_project_description", placeholder="What is this project for?")
         st.button("Create project", on_click=create_project, use_container_width=True)
 
-    if project_names:
-        for pname in project_names:
-            project_chats = [cid for cid, c in S.chats.items() if c.get("project") == pname]
-            with st.expander(f"📁 {pname} ({len(project_chats)})", expanded=(selected_project == pname)):
-                for cid in reversed(project_chats):
-                    if cid in S.chats and (not search or search in S.chats[cid].get("title", "").lower() or any(search in m.get("content", "").lower() for m in S.chats[cid].get("messages", []))):
-                        render_chat_button(cid)
+    for pname in project_names:
+        project_chats = [cid for cid, c in S.chats.items() if c.get("project") == pname]
+        with st.expander(f"📁 {pname} ({len(project_chats)})", expanded=(selected_project == pname)):
+            for cid in reversed(project_chats):
+                if cid in S.chats and (not search or search in S.chats[cid].get("title", "").lower() or any(search in m.get("content", "").lower() for m in S.chats[cid].get("messages", []))):
+                    render_chat_button(cid)
 
     st.markdown('<div class="sec">Recent chats</div>', unsafe_allow_html=True)
-    chat_ids = list(reversed(list(S.chats.keys())))
+    chat_ids = sorted(S.chats.keys(), key=lambda cid: S.chats[cid].get("updated_at", ""), reverse=True)
     if selected_project != "All projects":
         chat_ids = [cid for cid in chat_ids if S.chats[cid].get("project") == selected_project]
     chat_ids = [cid for cid in chat_ids if not search or search in S.chats[cid].get("title", "").lower() or any(search in m.get("content", "").lower() for m in S.chats[cid].get("messages", []))]
@@ -117,17 +234,10 @@ with st.sidebar:
         if selected_project == "All projects" and S.chats[cid].get("project"):
             continue
         render_chat_button(cid)
-    chat = S.chats.get(S.current)
-    messages = chat.get("messages", []) if chat else []
-    if chat:
-        project_name = chat.get("project") or "No project"
-        chat_title = chat.get("title") or "New chat"
-        st.caption(f"{project_name} · {chat_title}")
-
 
     with st.expander("Settings"):
-        st.caption("The API key is configured securely by the site owner and is not shown here.")
-        S.user_name = st.text_input("Your name", value=S.get("user_name", "Rounak"), key="display_name")
+        st.caption("NVIDIA and Supabase credentials are configured securely by the site owner.")
+        S.user_name = st.text_input("Your name", value=S.get("user_name", "there"), key="display_name")
         S.system_prompt = st.text_area("System prompt", value=S.get("system_prompt", "You are a helpful assistant."), key="system_prompt_input")
         S.temperature = st.slider("Temperature", 0.0, 1.5, float(S.get("temperature", 0.7)), 0.05, key="temperature_slider")
         S.max_tokens = st.slider("Max response tokens", 256, 16384, int(S.get("max_tokens", 4096)), 256, key="max_tokens_slider")
@@ -152,23 +262,11 @@ with st.sidebar:
 # ---------- Main panel ----------
 chat = S.chats.get(S.current) if S.current else None
 messages = chat.get("messages", []) if isinstance(chat, dict) else []
-
 if isinstance(chat, dict):
-    project_name = chat.get("project") or "No project"
-    chat_title = chat.get("title") or "New chat"
-    st.caption(f"{project_name} · {chat_title}")
-
+    st.caption(f"{chat.get('project') or 'No project'} · {chat.get('title') or 'New chat'}")
 if not messages:
-    st.markdown(
-        f'<div class="welcome"><span>✻</span> Hi, '
-        f'{S.get("user_name", "there")}</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<p class="sub">What would you like to explore today?</p>',
-        unsafe_allow_html=True,
-    )
-
+    st.markdown(f'<div class="welcome"><span>✻</span> Hi, {S.get("user_name", "there")}</div>', unsafe_allow_html=True)
+    st.markdown('<p class="sub">What would you like to explore today?</p>', unsafe_allow_html=True)
 for m in messages:
     with st.chat_message(m.get("role", "assistant")):
         if m.get("reasoning"):
@@ -176,7 +274,6 @@ for m in messages:
                 st.markdown(m["reasoning"])
         st.markdown(m.get("content", ""))
 
-# Composer: thinking toggle is beside the message field.
 st.divider()
 compose_col, thinking_col = st.columns([10, 2], vertical_alignment="bottom")
 with compose_col:
@@ -189,25 +286,27 @@ with thinking_col:
 
 if send and prompt.strip():
     if chat is None:
-        cid = uuid.uuid4().hex[:10]
+        cid = str(uuid.uuid4())
         title = prompt.strip().splitlines()[0][:40] or "New chat"
         default_project = selected_project if selected_project != "All projects" else None
-        S.chats[cid] = {"title": title, "messages": [], "pinned": False, "project": default_project}
+        chat = {"title": title, "messages": [], "pinned": False, "project": default_project}
+        S.chats[cid] = chat
         S.current = cid
-        chat = S.chats[cid]
         messages = chat["messages"]
+    else:
+        cid = S.current
 
     messages.append({"role": "user", "content": prompt.strip()})
+    if len(messages) == 1:
+        chat["title"] = prompt.strip().splitlines()[0][:40] or "New chat"
     api_messages = [{"role": "system", "content": S.get("system_prompt", "You are a helpful assistant.")}]
     api_messages.extend({"role": m["role"], "content": m["content"]} for m in messages if m.get("role") in ("user", "assistant"))
-
     with st.chat_message("user"):
         st.markdown(prompt.strip())
-
     with st.chat_message("assistant"):
         try:
-            client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=NVIDIA_API_KEY)
-            stream = client.chat.completions.create(
+            client_ai = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=NVIDIA_API_KEY)
+            stream = client_ai.chat.completions.create(
                 model=MODEL_ID,
                 messages=api_messages,
                 temperature=S.get("temperature", 0.7),
@@ -217,7 +316,6 @@ if send and prompt.strip():
                 stream=True,
             )
             reasoning, reply = "", ""
-            think_box = None
             if S.get("thinking", False):
                 think_box = st.expander("Thinking", expanded=True)
                 think_placeholder = think_box.empty()
@@ -235,7 +333,14 @@ if send and prompt.strip():
                     answer_placeholder.markdown(reply + "▌")
             answer_placeholder.markdown(reply or "The model returned an empty response.")
             messages.append({"role": "assistant", "content": reply, "reasoning": reasoning})
+            try:
+                persist_chat(cid)
+            except Exception as db_exc:
+                st.error(f"The reply was generated, but saving the chat failed: {db_exc}")
             st.rerun()
         except Exception as exc:
             st.error(f"Request failed: {exc}")
-            # Keep the user message in history; it can be retried in a new turn.
+            try:
+                persist_chat(cid)
+            except Exception as db_exc:
+                st.warning(f"The message could not be saved: {db_exc}")
