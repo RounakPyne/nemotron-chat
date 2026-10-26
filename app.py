@@ -25,27 +25,38 @@ except (KeyError, FileNotFoundError):
 MODEL_ID = st.secrets.get("NVIDIA_MODEL_ID", "nvidia/nemotron-3-ultra-550b-a55b")
 st.markdown("""
 <style>
-:root { --bg:#FAF9F5; --side:#F0EEE6; --text:#3D3929; --muted:#83827D; --accent:#C96442; --bubble:#EDEADF; --line:#E3E0D5; }
-html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background:var(--bg) !important; color:var(--text); }
+:root { --bg:#FAF9F5; --side:#F0EEE6; --text:#3D3929; --muted:#83827D; --accent:#C96442; --line:#E3E0D5; }
+html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background:var(--bg) !important; color:var(--text) !important; }
 [data-testid="stHeader"] { background:var(--bg) !important; }
 #MainMenu, footer { visibility:hidden; }
 [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child { background:var(--side) !important; border-right:1px solid var(--line); }
-[data-testid="stSidebar"] * { color:var(--text); }
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] button,
+[data-testid="stSidebar"] button span,
+[data-testid="stSidebar"] input { color:var(--text) !important; }
+[data-testid="stSidebar"] > div:first-child { padding-top:.65rem !important; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap:.38rem !important; }
+[data-testid="stSidebar"] [data-testid="stElementContainer"] { margin-bottom:0 !important; }
 [data-testid="stSidebarCollapsedControl"] { visibility:visible !important; display:flex !important; }
 h1,h2,h3,.brand,.welcome { font-family:Georgia,"Times New Roman",serif !important; font-weight:400 !important; color:var(--text) !important; }
-.brand { font-size:1.55rem; margin:0 0 .8rem .1rem; }
+.brand { font-size:1.45rem; margin:0 0 .25rem .1rem; }
 .brand span,.welcome span { color:var(--accent); }
-.sec { font-size:.8rem; color:var(--muted); margin:.8rem 0 .3rem .2rem; }
-.welcome { text-align:center; font-size:2.5rem; margin-top:15vh; line-height:1.3; }
-.welcome span { margin-right:10px; }
+.sec { font-size:.76rem; color:var(--muted); margin:.35rem 0 .1rem .15rem; }
+.welcome { text-align:center; font-size:2.35rem; margin-top:12vh; line-height:1.3; }
+.welcome span { margin-right:8px; }
 .sub { text-align:center; color:var(--muted); }
-[data-testid="stChatMessage"] { background:transparent; padding:.35rem 0; }
+[data-testid="stChatMessage"] { background:transparent; padding:.25rem 0; }
 [data-testid="stChatMessageAvatarUser"],[data-testid="stChatMessageAvatarAssistant"] { display:none; }
-[data-testid="stExpander"] { border:1px solid var(--line) !important; border-radius:12px; background:transparent; }
-.stButton > button { border-radius:10px; border-color:transparent; color:var(--text); background:transparent; }
-.stButton > button:hover { background:#E6E3D8; border-color:transparent; }
-[data-testid="stSidebar"] input,[data-testid="stSidebar"] textarea { background:white !important; border-radius:10px; }
-div[data-testid="stTextInput"] input { border-radius:14px; }
+[data-testid="stExpander"] { border:1px solid var(--line) !important; border-radius:10px; background:transparent; }
+.stButton > button, [data-testid="stFormSubmitButton"] button { border-radius:9px !important; border:1px solid transparent !important; color:var(--text) !important; background:transparent !important; min-height:2.15rem !important; padding:.35rem .55rem !important; line-height:1.15 !important; font-size:.88rem !important; }
+.stButton > button span, [data-testid="stFormSubmitButton"] button span { color:var(--text) !important; visibility:visible !important; opacity:1 !important; }
+.stButton > button:hover { background:#E6E3D8 !important; border-color:var(--line) !important; }
+[data-testid="stSidebar"] input,[data-testid="stSidebar"] textarea { background:white !important; border-radius:9px !important; }
+div[data-testid="stTextInput"] input { border-radius:10px; }
+[data-testid="stSidebar"] [data-testid="stExpander"] details summary { padding:.35rem .55rem !important; }
+[data-testid="stSidebar"] [data-testid="stExpander"] { margin:0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -194,13 +205,32 @@ def create_project():
 
 def render_chat_button(cid):
     c = S.chats[cid]
-    title = c.get("title", "New chat")
-    if len(title) > 24:
-        title = title[:23] + "…"
-    a, b, d = st.columns([6, 1, 1], gap="small")
-    a.button(title, key=f"open_{cid}", on_click=open_chat, args=(cid,), use_container_width=True)
-    b.button("★" if c.get("pinned") else "☆", key=f"pin_{cid}", on_click=toggle_pin, args=(cid,), help="Pin chat")
-    d.button("×", key=f"delete_{cid}", on_click=delete_chat, args=(cid,), help="Delete chat")
+    title = (c.get("title") or "New chat").strip()
+    if len(title) > 32:
+        title = title[:31] + "…"
+    st.button(
+        f"◦  {title}",
+        key=f"open_{cid}",
+        on_click=open_chat,
+        args=(cid,),
+        use_container_width=True,
+        help=c.get("title", "Open chat"),
+    )
+    action_col1, action_col2 = st.columns([1, 1], gap="small")
+    action_col1.button(
+        "☆ Pin" if not c.get("pinned") else "★ Pinned",
+        key=f"pin_{cid}",
+        on_click=toggle_pin,
+        args=(cid,),
+        use_container_width=True,
+    )
+    action_col2.button(
+        "× Delete",
+        key=f"delete_{cid}",
+        on_click=delete_chat,
+        args=(cid,),
+        use_container_width=True,
+    )
 
 # ---------- Sidebar ----------
 with st.sidebar:
@@ -226,7 +256,11 @@ with st.sidebar:
                     render_chat_button(cid)
 
     st.markdown('<div class="sec">Recent chats</div>', unsafe_allow_html=True)
-    chat_ids = sorted(S.chats.keys(), key=lambda cid: S.chats[cid].get("updated_at", ""), reverse=True)
+    chat_ids = sorted(
+        S.chats.keys(),
+        key=lambda cid: (S.chats[cid].get("updated_at") or "", cid),
+        reverse=True,
+    )
     if selected_project != "All projects":
         chat_ids = [cid for cid in chat_ids if S.chats[cid].get("project") == selected_project]
     chat_ids = [cid for cid in chat_ids if not search or search in S.chats[cid].get("title", "").lower() or any(search in m.get("content", "").lower() for m in S.chats[cid].get("messages", []))]
