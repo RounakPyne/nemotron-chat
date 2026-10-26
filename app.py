@@ -153,8 +153,12 @@ with st.sidebar:
 chat = S.chats.get(S.current)
 messages = chat.get("messages", []) if chat else []
 
-if chat:
-    st.caption(chat.get("project", "No project") + "  ·  " + chat.get("title", "New chat"))
+
+st.caption(
+    f"{chat.get('project') or 'No project'}  ·  "
+    f"{chat.get('title') or 'New chat'}"
+)
+
 if not messages:
     st.markdown(f'<div class="welcome"><span>✻</span> Hi, {S.get("user_name", "there")}</div>', unsafe_allow_html=True)
     st.markdown('<p class="sub">What would you like to explore today?</p>', unsafe_allow_html=True)
