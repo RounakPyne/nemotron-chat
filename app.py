@@ -52,6 +52,8 @@ h1,h2,h3,.brand,.welcome { font-family:Georgia,"Times New Roman",serif !importan
 [data-testid="stExpander"] { border:1px solid var(--line) !important; border-radius:10px; background:transparent; }
 .stButton > button, [data-testid="stFormSubmitButton"] button { border-radius:9px !important; border:1px solid transparent !important; color:var(--text) !important; background:transparent !important; min-height:2.15rem !important; padding:.35rem .55rem !important; line-height:1.15 !important; font-size:.88rem !important; }
 .stButton > button span, [data-testid="stFormSubmitButton"] button span { color:var(--text) !important; visibility:visible !important; opacity:1 !important; }
+[data-testid="stSidebar"] .stButton > button { width:100%; text-align:left !important; white-space:normal !important; height:auto !important; min-height:2.1rem !important; }
+[data-testid="stSidebar"] .stButton > button p { white-space:normal !important; overflow-wrap:anywhere !important; }
 .stButton > button:hover { background:#E6E3D8 !important; border-color:var(--line) !important; }
 [data-testid="stSidebar"] input,[data-testid="stSidebar"] textarea { background:white !important; border-radius:9px !important; }
 div[data-testid="stTextInput"] input { border-radius:10px; }
@@ -205,7 +207,7 @@ def create_project():
 
 def render_chat_button(cid):
     c = S.chats[cid]
-    title = (c.get("title") or "New chat").strip()
+    title = (c.get("title") or "New chat").strip() or "New chat"
     if len(title) > 32:
         title = title[:31] + "…"
     st.button(
@@ -311,14 +313,14 @@ for m in messages:
 st.divider()
 compose_col, thinking_col = st.columns([10, 2], vertical_alignment="bottom")
 with compose_col:
-    with st.form("message_form", clear_on_submit=True, border=False):
-        prompt = st.text_area("Message Nemotron", placeholder="Message Nemotron…", label_visibility="collapsed", height=76, key="message_draft")
-        send = st.form_submit_button("↑  Send", use_container_width=True)
+    # Streamlit's chat input submits with Enter and supports multiline input
+    # using Shift+Enter in versions that support multiline chat input.
+    prompt = st.chat_input("Message Nemotron…", key="message_draft")
 with thinking_col:
     st.toggle("Thinking", key="thinking", help="Show the model's reasoning when supported by the model/API.")
     st.caption("Model: Nemotron")
 
-if send and prompt.strip():
+if prompt and prompt.strip():
     if chat is None:
         cid = str(uuid.uuid4())
         title = prompt.strip().splitlines()[0][:40] or "New chat"
