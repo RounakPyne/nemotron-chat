@@ -117,6 +117,8 @@ with st.sidebar:
         if selected_project == "All projects" and S.chats[cid].get("project"):
             continue
         render_chat_button(cid)
+    chat = S.chats.get(S.current)
+    messages = chat.get("messages", []) if chat else []
     if chat:
         project_name = chat.get("project") or "No project"
         chat_title = chat.get("title") or "New chat"
