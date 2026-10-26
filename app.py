@@ -117,8 +117,11 @@ with st.sidebar:
         if selected_project == "All projects" and S.chats[cid].get("project"):
             continue
         render_chat_button(cid)
-    if search and not chat_ids:
-        st.caption("No chats found.")
+    if chat:
+        project_name = chat.get("project") or "No project"
+        chat_title = chat.get("title") or "New chat"
+        st.caption(f"{project_name} · {chat_title}")
+
 
     with st.expander("Settings"):
         st.caption("The API key is configured securely by the site owner and is not shown here.")
