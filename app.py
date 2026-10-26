@@ -150,18 +150,24 @@ with st.sidebar:
                 st.error("Could not read that JSON backup.")
 
 # ---------- Main panel ----------
-chat = S.chats.get(S.current)
-messages = chat.get("messages", []) if chat else []
+chat = S.chats.get(S.current) if S.current else None
+messages = chat.get("messages", []) if isinstance(chat, dict) else []
 
-
-st.caption(
-    f"{chat.get('project') or 'No project'}  ·  "
-    f"{chat.get('title') or 'New chat'}"
-)
+if isinstance(chat, dict):
+    project_name = chat.get("project") or "No project"
+    chat_title = chat.get("title") or "New chat"
+    st.caption(f"{project_name} · {chat_title}")
 
 if not messages:
-    st.markdown(f'<div class="welcome"><span>✻</span> Hi, {S.get("user_name", "there")}</div>', unsafe_allow_html=True)
-    st.markdown('<p class="sub">What would you like to explore today?</p>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="welcome"><span>✻</span> Hi, '
+        f'{S.get("user_name", "there")}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p class="sub">What would you like to explore today?</p>',
+        unsafe_allow_html=True,
+    )
 
 for m in messages:
     with st.chat_message(m.get("role", "assistant")):
